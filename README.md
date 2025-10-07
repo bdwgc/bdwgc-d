@@ -1,5 +1,9 @@
 # bdwgc-d -- Boehm-Demers-Weiser conservative garbage collector library for D
 
+[![Static Badge](https://img.shields.io/badge/v2.111.0%20(stable)-f8240e?logo=d&logoColor=f8240e&label=runtime)](https://dlang.org/download.html)
+![Latest release](https://img.shields.io/github/v/release/bdwgc/bdwgc-d?include_prereleases&label=latest)
+[![Artifacts](https://github.com/bdwgc/bdwgc-d/actions/workflows/ci.yml/badge.svg)](https://github.com/bdwgc/bdwgc-d/actions/workflows/ci.yml)
+
 D library for interfacing with libgc (bdwgc) using [`importC`](https://dlang.org/spec/importc.html)
 
 #### What's the difference between [libgc-d](https://github.com/lycus/libgc-d)?
