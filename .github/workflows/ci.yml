@@ -65,7 +65,7 @@ jobs:
       - name: prepare-linux
         run: |
             pacman -Syu --noconfirm
-            pacman -S --noconfirm --needed gcc gdc dub      
+            pacman -S --noconfirm --needed gcc gdc dub pkg-config      
       - name: Testing
         run: dub test
       - name: Build examples
