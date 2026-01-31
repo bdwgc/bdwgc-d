@@ -1,4 +1,4 @@
-#pragma attribute(push, nothrow, nogc, pure) // dmd-frontend v2.111.0 feature
-// #define GC_THREADS //FIXME: importC need improvements to C macro
+// dmd-frontend v2.111.0 feature
+#pragma attribute(push, nothrow, nogc)
 #include <gc.h>
 #pragma attribute(pop)

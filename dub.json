@@ -41,21 +41,11 @@
 			]
 		}
 	},
-	"dflags-ldc": [
+	"dflags": [
 		"-i",
 		"-preview=all",
 		"-P-I$PACKAGE_DIR/bdwgc-master/include",
 		"--verrors-context"
-	],
-	"dflags-dmd": [
-		"-i",
-		"-preview=all",
-		"-P-I$PACKAGE_DIR/bdwgc-master/include",
-		"-verrors=context"
-	],
-	"dflags-gdc": [
-		"-fpreview=all",
-		"-I$PACKAGE_DIR/bdwgc-master/include"
 	],
 	"lflags-posix": [
 		"-L$PACKAGE_DIR/build"
