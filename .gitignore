@@ -26,3 +26,5 @@ build/
 
 # bdwgc
 bdwgc-*/
+# libatomic_ops
+libatomic_ops-*/
