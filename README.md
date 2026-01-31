@@ -3,6 +3,7 @@
 [![Static Badge](https://img.shields.io/badge/v2.111.0%20(stable)-f8240e?logo=d&logoColor=f8240e&label=runtime)](https://dlang.org/download.html)
 ![Latest release](https://img.shields.io/github/v/release/bdwgc/bdwgc-d?include_prereleases&label=latest)
 [![Artifacts](https://github.com/bdwgc/bdwgc-d/actions/workflows/ci.yml/badge.svg)](https://github.com/bdwgc/bdwgc-d/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bdwgc/bdwgc-d)
 
 D library for interfacing with libgc (bdwgc) using [`importC`](https://dlang.org/spec/importc.html)
 
@@ -12,7 +13,10 @@ D library for interfacing with libgc (bdwgc) using [`importC`](https://dlang.org
 
 ### Required
 
-- [dmd/gdc/ldc](https://dlang.org/download)
+- [dmd/ldc](https://dlang.org/download)
+
+> [!WARNING]
+> GDC/GNU D does not directly compile C files into modules.
 
 ### How to use
 
@@ -22,7 +26,7 @@ dub add bdwgc-d
 
 ### Compiler Support
 
-`bdwgc-d` should be compatible with multiple D compilers including `gdc`, `ldc2`, and `dmd`. When you use `dub` to build your project, it should automatically detect the compiler you have installed and use it to compile your code.
+`bdwgc-d` should be compatible with multiple D compilers including `ldc2`, and `dmd`. When you use `dub` to build your project, it should automatically detect the compiler you have installed and use it to compile your code.
 
 #### Acknowledge for reference
 
