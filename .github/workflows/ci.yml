@@ -34,13 +34,38 @@ jobs:
       fail-fast: false
     runs-on: ${{matrix.os}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dlang-community/setup-dlang@v2
         with:
           compiler: ${{matrix.compiler}}
       - uses: egor-tensin/vs-shell@v2
         with:
           arch: x64
+      - name: Testing
+        run: dub test
+      - name: Build examples
+        working-directory: examples
+        run: |
+          dub :example1 -q
+          dub :example2 -q
+          dub :example3 -q
+          dub :example4 -q
+
+  archlinux-gdc:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - name: prepare-linux
+        run: |
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed gcc gdc dub      
       - name: Testing
         run: dub test
       - name: Build examples
