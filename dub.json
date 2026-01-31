@@ -61,12 +61,16 @@
 		"-L$PACKAGE_DIR/build"
 	],
 	"lflags-windows": [
-		"/LIBPATH:$PACKAGE_DIR\\build"
+		"/LIBPATH:$PACKAGE_DIR\\build",
+		"/NODEFAULTLIB:libcmt.lib",
+		"/NODEFAULTLIB:libcmtd.lib",
+		"/DEFAULTLIB:msvcrt.lib"
 	],
 	"libs": [
 		"gc"
 	],
 	"libs-windows": [
+		"atomic_ops",
 		"user32"
 	],
 	"preBuildCommands-linux": [
@@ -164,6 +168,7 @@
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\mark_rts.c /Fo$PACKAGE_DIR\\build\\mark_rts.obj\"",
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\misc.c /Fo$PACKAGE_DIR\\build\\misc.obj\"",
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\gcj_mlc.c /Fo$PACKAGE_DIR\\build\\gcj_mlc.obj\"",
+		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\extra\\msvc_dbg.c /Fo$PACKAGE_DIR\\build\\msvc_dbg.obj\"",
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\new_hblk.c /Fo$PACKAGE_DIR\\build\\new_hblk.obj\"",
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\os_dep.c /Fo$PACKAGE_DIR\\build\\os_dep.obj\"",
 		"powershell -Command \"cl.exe /nologo /W0 /O2 /MD /DNDEBUG /DGC_NOT_DLL /DDONT_USE_USER32_DLL /D_CRT_SECURE_NO_DEPRECATE /DNO_SEH_AVAILABLE /DNO_EXECUTE_PERMISSION /DPARALLEL_MARK /DGC_THREADS /DGC_GCJ_SUPPORT /DGC_ENABLE_SUSPEND_THREAD /DJAVA_FINALIZATION /DALL_INTERIOR_POINTERS /I$PACKAGE_DIR\\libatomic_ops-master\\src /I$PACKAGE_DIR\\bdwgc-master\\include /c $PACKAGE_DIR\\bdwgc-master\\ptr_chck.c /Fo$PACKAGE_DIR\\build\\ptr_chck.obj\"",
