@@ -52,13 +52,16 @@ void main() @trusted {
     }
 
     foreach (i, p; people) {
-        GC_printf("%s, have %d years old.\n", p.name, p.age);
+        GC_printf("%s is %d years old.\n", p.name, p.age);
     }
 
-    // Perform GC collection
+    // Perform GC collection and report heap size
     BoehmAllocator.instance.collect();
     debug
+    {
         GC_printf("GC collection triggered\n");
+        GC_printf("heap size after collect: %zu bytes\n", BoehmAllocator.instance.getHeapSize());
+    }
 
 cleanup:
     // Clear references to aid GC

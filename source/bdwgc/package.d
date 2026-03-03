@@ -171,19 +171,29 @@ struct BoehmAllocator
         return true;
     }
 
-    /// Allocates zero-initialized memory
+    /// Allocates zero-initialized, pointer-scannable memory.
+    /// Uses GC_MALLOC which zero-initializes and allows the GC to trace
+    /// any GC-managed pointers stored in the returned block.
     @trusted @nogc nothrow
     void[] allocateZeroed(size_t bytes) shared
     {
         if (!bytes)
             return null;
-        auto p = GC_MALLOC_ATOMIC(bytes);
-        if (!p)
-            return null;
-        import core.stdc.string : memset;
+        auto p = GC_MALLOC(bytes); // already zeroed; scannable for GC pointers
+        return p ? p[0 .. bytes] : null;
+    }
 
-        memset(p, 0, bytes);
-        return p[0 .. bytes];
+    /// Allocates memory for non-pointer (scalar) data.
+    /// Uses GC_MALLOC_ATOMIC: the GC will not scan this block for pointers,
+    /// making it more efficient for large numeric arrays or byte buffers.
+    /// Do NOT store GC-managed pointers in memory returned by this method.
+    @trusted @nogc nothrow
+    void[] allocateAtomic(size_t bytes) shared
+    {
+        if (!bytes)
+            return null;
+        auto p = GC_MALLOC_ATOMIC(bytes);
+        return p ? p[0 .. bytes] : null;
     }
 
     /// Enables incremental garbage collection
@@ -198,6 +208,20 @@ struct BoehmAllocator
     void disable() shared
     {
         GC_disable();
+    }
+
+    /// Re-enables garbage collection after disable()
+    @trusted @nogc nothrow
+    void enable() shared
+    {
+        GC_enable();
+    }
+
+    /// Returns the current total heap size in bytes
+    @trusted @nogc nothrow
+    size_t getHeapSize() shared const
+    {
+        return GC_get_heap_size();
     }
 
     /// Triggers garbage collection
@@ -382,5 +406,181 @@ version (unittest)
         assert(names.length == 3);
         assert(names.ptr);
         BoehmAllocator.instance.deallocate(names);
+    }
+
+    @("allocateZeroed: memory is zero-initialized")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateZeroed(32);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        foreach (i; 0 .. 32)
+            assert((cast(ubyte[]) b)[i] == 0, "byte not zero");
+    }
+
+    @("enable: re-enables GC after disable")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        BoehmAllocator.instance.disable();
+        BoehmAllocator.instance.enable();
+        // After re-enabling, allocation must still work
+        void[] b = BoehmAllocator.instance.allocate(64);
+        assert(b !is null);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("getHeapSize: returns positive value after allocation")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(1024 * 1024);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        assert(BoehmAllocator.instance.getHeapSize() > 0);
+    }
+
+    @("allocateAtomic: returns non-null for positive size")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(256);
+        assert(b !is null);
+        assert(b.length == 256);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("allocateAtomic: zero size returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.allocateAtomic(0);
+        assert(b is null);
+    }
+
+    @("allocateAtomic: returned memory is GC-heap-owned")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(64);
+        assert(b !is null);
+        assert(BoehmAllocator.instance.isHeapPtr(b.ptr));
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("allocateAtomic: memory is writable")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(16);
+        assert(b !is null);
+        (cast(ubyte[]) b)[] = ubyte(0xAB);
+        foreach (i; 0 .. 16)
+            assert((cast(ubyte[]) b)[i] == 0xAB);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    // Semantic requirement: allocateZeroed must use GC_MALLOC (pointer-scanning),
+    // NOT GC_MALLOC_ATOMIC. GC_MALLOC_ATOMIC tells BDWGC the block contains no GC
+    // pointers and skips scanning it entirely. A general-purpose zeroed allocator
+    // must allow callers to store GC-managed pointers inside the returned memory.
+    // Note: a runtime assertion cannot reliably distinguish the two with BDWGC's
+    // conservative collector (stack residue keeps inner blocks alive regardless).
+    // The correctness is enforced by the implementation using GC_MALLOC below.
+
+    @("goodAllocSize: zero returns zero")
+    @nogc @system nothrow unittest
+    {
+        assert(BoehmAllocator.instance.goodAllocSize(0) == 0);
+    }
+
+    @("goodAllocSize: rounds up to next multiple of alignment")
+    @nogc @system nothrow unittest
+    {
+        enum a = BoehmAllocator.alignment;
+        assert(BoehmAllocator.instance.goodAllocSize(1) == a);
+        assert(BoehmAllocator.instance.goodAllocSize(a) == a);
+        assert(BoehmAllocator.instance.goodAllocSize(a + 1) == a * 2);
+        assert(BoehmAllocator.instance.goodAllocSize(a * 2) == a * 2);
+        assert(BoehmAllocator.instance.goodAllocSize(a * 2 + 1) == a * 3);
+    }
+
+    @("allocate(0) returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.allocate(0);
+        assert(b is null);
+        assert(b.ptr is null);
+    }
+
+    @("alignedAllocate with zero bytes returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.alignedAllocate(0, 16);
+        assert(b is null);
+    }
+
+    @("alignedAllocate with non-power-of-2 alignment returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.alignedAllocate(16, 3);
+        assert(b is null);
+    }
+
+    @("alignedAllocate with alignment smaller than pointer size returns null")
+    @nogc @system nothrow unittest
+    {
+        // (void*).sizeof / 2 is below minimum — must be rejected
+        auto b = BoehmAllocator.instance.alignedAllocate(16, cast(uint)(void*).sizeof / 2);
+        assert(b is null);
+    }
+
+    @("owns(null[]) returns false")
+    @nogc @system nothrow unittest
+    {
+        void[] empty = null;
+        assert(!BoehmAllocator.instance.owns(empty));
+    }
+
+    @("reallocate to zero deallocates and nulls the slice")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(64);
+        assert(b !is null);
+        bool ok = BoehmAllocator.instance.reallocate(b, 0);
+        assert(ok);
+        assert(b is null);
+    }
+
+    @("isGoodDynamicAlignment: zero and non-powers-of-2 are invalid")
+    @nogc nothrow pure unittest
+    {
+        assert(!isGoodDynamicAlignment(0));
+        assert(!isGoodDynamicAlignment(3));
+        assert(!isGoodDynamicAlignment(5));
+        assert(!isGoodDynamicAlignment(6));
+        assert(!isGoodDynamicAlignment(12));
+        assert(!isGoodDynamicAlignment(uint.max)); // 0xFFFFFFFF is not a power of 2
+    }
+
+    @("isGoodDynamicAlignment: values smaller than pointer size are invalid")
+    @nogc nothrow pure unittest
+    {
+        // (void*).sizeof / 2 is always < (void*).sizeof, so must be invalid
+        assert(!isGoodDynamicAlignment((void*).sizeof / 2));
+    }
+
+    @("isGoodDynamicAlignment: pointer size and multiples are valid")
+    @nogc nothrow pure unittest
+    {
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof));
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof * 2));
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof * 4));
+        assert(isGoodDynamicAlignment(64));
+        assert(isGoodDynamicAlignment(128));
     }
 }

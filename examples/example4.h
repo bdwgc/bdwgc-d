@@ -2,7 +2,6 @@
 #define PERSON_H
 
 #include <gc_cpp.h>
-#include <string.h>
 
 // default: extern(C++)
 
