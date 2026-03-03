@@ -26,8 +26,9 @@ version (GCThreads)
 {
 extern (C) @nogc nothrow:
     int GC_thread_is_registered(); /// Returns non-zero if thread is registered
-    void GC_register_my_thread(); /// Registers the current thread
-    void GC_unregister_my_thread(); /// Unregisters the current thread
+    /// Registers the current thread; pass result of GC_get_stack_base().
+    int GC_register_my_thread(const(GC_stack_base)*);
+    int GC_unregister_my_thread(); /// Unregisters an explicitly-registered thread
     version (Posix) void GC_allow_register_threads(); /// Enables dynamic thread registration
 }
 
@@ -63,17 +64,30 @@ struct ThreadGuard
     this(this) @disable; // Prevent copying
     private bool isRegistered; // Track registration state
 
-    /// Factory function to create and register a ThreadGuard
+    /// Factory function to create and register a ThreadGuard.
+    /// Registers the calling thread only if it is not already registered.
+    /// The main thread is auto-registered by GC_init(); worker threads need explicit registration.
     @trusted static ThreadGuard create()
     {
         ThreadGuard guard;
         version (GCThreads)
         {
+            version (D_BetterC)
+            {
+                // In betterC the module constructor does not run.
+                // Initialize the collector here so GC_init auto-registers the
+                // main thread (with GC_THREADS) before we query its state.
+                GC_init();
+                version (Posix)
+                    GC_allow_register_threads();
+            }
             if (!GC_thread_is_registered())
             {
                 debug
-                    GC_printf("Registering thread\n");
-                GC_register_my_thread();
+                GC_printf("Registering thread\n");
+                GC_stack_base sb;
+                GC_get_stack_base(&sb);
+                GC_register_my_thread(&sb);
                 guard.isRegistered = true;
             }
         }
@@ -88,7 +102,7 @@ struct ThreadGuard
             if (isRegistered && GC_thread_is_registered())
             {
                 debug
-                    GC_printf("Unregistering thread\n");
+                GC_printf("Unregistering thread\n");
                 GC_unregister_my_thread();
             }
         }
@@ -115,7 +129,7 @@ struct BoehmAllocator
     shared static this() @nogc nothrow
     {
         debug
-            GC_printf("Initializing BDWGC\n");
+        GC_printf("Initializing BDWGC\n");
         GC_init();
         version (GCThreads)
         {
@@ -393,15 +407,19 @@ version (unittest)
     {
         version (GCThreads)
         {
-            assert(!GC_thread_is_registered());
+            // GC_init() (called in shared static this) implicitly registers the main
+            // thread when the library is compiled with -DGC_THREADS.
+            assert(GC_thread_is_registered());
             {
                 auto guard = ThreadGuard.create();
+                // Main thread was already registered: create() is a no-op.
                 assert(GC_thread_is_registered());
                 auto buffer = BoehmAllocator.instance.allocate(1024);
                 assert(buffer !is null);
                 BoehmAllocator.instance.deallocate(buffer);
             }
-            assert(!GC_thread_is_registered());
+            // Destructor is also a no-op (isRegistered == false); thread stays registered.
+            assert(GC_thread_is_registered());
         }
         else
         {
@@ -648,7 +666,7 @@ version (unittest)
     {
         auto guard = ThreadGuard.create();
 
-        void[] gcBlock     = BoehmAllocator.instance.allocate(256);
+        void[] gcBlock = BoehmAllocator.instance.allocate(256);
         void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(256);
         assert(gcBlock !is null && atomicBlock !is null);
         scope (exit)
@@ -659,9 +677,10 @@ version (unittest)
 
         // Interior pointer at offset 128 must resolve back to the block start
         assert(BoehmAllocator.instance.resolveInternalPointer(gcBlock.ptr + 128)
-               == gcBlock.ptr);
-        assert(BoehmAllocator.instance.resolveInternalPointer(atomicBlock.ptr + 128)
-               == atomicBlock.ptr);
+                == gcBlock.ptr);
+        assert(BoehmAllocator.instance.resolveInternalPointer(
+                atomicBlock.ptr + 128)
+                == atomicBlock.ptr);
     }
 
     @("integration: heap stats account for both allocate and allocateAtomic")
@@ -671,7 +690,7 @@ version (unittest)
 
         size_t totalBefore = BoehmAllocator.instance.totalBytes();
 
-        void[] gcBlock     = BoehmAllocator.instance.allocate(512 * 1024);
+        void[] gcBlock = BoehmAllocator.instance.allocate(512 * 1024);
         void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(512 * 1024);
         assert(gcBlock !is null && atomicBlock !is null);
 

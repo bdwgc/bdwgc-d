@@ -91,6 +91,21 @@
             "postBuildCommands-windows": [
                 "powershell -Command Remove-Item *.obj"
             ]
+        },
+        {
+            "name": "example5",
+            "mainSourceFile": "example5.d",
+            "targetPath": "build",
+            "targetType": "executable",
+            "buildOptions": [
+                "betterC"
+            ],
+            "lflags-windows": ["/NODEFAULTLIB:libcmt"],
+            "dependencies": {
+                "bdwgc-d": {
+                    "path": "../"
+                }
+            }
         }
     ]
 }
