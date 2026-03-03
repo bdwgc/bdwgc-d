@@ -11,7 +11,7 @@ void main() @trusted
 {
     foreach (i; 0 .. max)
     {
-        // Allocate pointer-sized memory for p (zero-initialized, like GC_MALLOC_ATOMIC)
+        // Allocate pointer-sized memory for p (zero-initialized, pointer-scannable)
         void[] pBuf = BoehmAllocator.instance.allocateZeroed(size_t.sizeof);
         if (!pBuf.ptr)
         {
@@ -45,7 +45,7 @@ void main() @trusted
         // Periodically print heap size
         if (i % 100_000 == 0)
         {
-            const heap = GC_get_heap_size();
+            const heap = BoehmAllocator.instance.getHeapSize();
             version (Windows)
             {
                 GC_printf("heap size: %u\n", cast(uint) heap);

@@ -77,7 +77,7 @@
             ],
 	    "lflags-windows":["/NODEFAULTLIB:libcmt"],
 	    "preGenerateCommands-linux": [
-                "g++ -I${BDWGC_D_PACKAGE_DIR}/bdwgc-master/include -c -o example4.o example4.cc"
+                "g++ -std=c++14 -I${BDWGC_D_PACKAGE_DIR}/bdwgc-master/include -c -o example4.o example4.cc"
             ],
             "preGenerateCommands-osx": [
                 "clang++ -std=c++14 -I${BDWGC_D_PACKAGE_DIR}/bdwgc-master/include -c -o example4.o example4.cc"
@@ -91,6 +91,21 @@
             "postBuildCommands-windows": [
                 "powershell -Command Remove-Item *.obj"
             ]
+        },
+        {
+            "name": "example5",
+            "mainSourceFile": "example5.d",
+            "targetPath": "build",
+            "targetType": "executable",
+            "buildOptions": [
+                "betterC"
+            ],
+            "lflags-windows": ["/NODEFAULTLIB:libcmt"],
+            "dependencies": {
+                "bdwgc-d": {
+                    "path": "../"
+                }
+            }
         }
     ]
 }

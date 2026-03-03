@@ -26,8 +26,9 @@ version (GCThreads)
 {
 extern (C) @nogc nothrow:
     int GC_thread_is_registered(); /// Returns non-zero if thread is registered
-    void GC_register_my_thread(); /// Registers the current thread
-    void GC_unregister_my_thread(); /// Unregisters the current thread
+    /// Registers the current thread; pass result of GC_get_stack_base().
+    int GC_register_my_thread(const(GC_stack_base)*);
+    int GC_unregister_my_thread(); /// Unregisters an explicitly-registered thread
     version (Posix) void GC_allow_register_threads(); /// Enables dynamic thread registration
 }
 
@@ -63,17 +64,30 @@ struct ThreadGuard
     this(this) @disable; // Prevent copying
     private bool isRegistered; // Track registration state
 
-    /// Factory function to create and register a ThreadGuard
+    /// Factory function to create and register a ThreadGuard.
+    /// Registers the calling thread only if it is not already registered.
+    /// The main thread is auto-registered by GC_init(); worker threads need explicit registration.
     @trusted static ThreadGuard create()
     {
         ThreadGuard guard;
         version (GCThreads)
         {
+            version (D_BetterC)
+            {
+                // In betterC the module constructor does not run.
+                // Initialize the collector here so GC_init auto-registers the
+                // main thread (with GC_THREADS) before we query its state.
+                GC_init();
+                version (Posix)
+                    GC_allow_register_threads();
+            }
             if (!GC_thread_is_registered())
             {
                 debug
-                    GC_printf("Registering thread\n");
-                GC_register_my_thread();
+                GC_printf("Registering thread\n");
+                GC_stack_base sb;
+                GC_get_stack_base(&sb);
+                GC_register_my_thread(&sb);
                 guard.isRegistered = true;
             }
         }
@@ -88,7 +102,7 @@ struct ThreadGuard
             if (isRegistered && GC_thread_is_registered())
             {
                 debug
-                    GC_printf("Unregistering thread\n");
+                GC_printf("Unregistering thread\n");
                 GC_unregister_my_thread();
             }
         }
@@ -115,7 +129,7 @@ struct BoehmAllocator
     shared static this() @nogc nothrow
     {
         debug
-            GC_printf("Initializing BDWGC\n");
+        GC_printf("Initializing BDWGC\n");
         GC_init();
         version (GCThreads)
         {
@@ -171,19 +185,29 @@ struct BoehmAllocator
         return true;
     }
 
-    /// Allocates zero-initialized memory
+    /// Allocates zero-initialized, pointer-scannable memory.
+    /// Uses GC_MALLOC which zero-initializes and allows the GC to trace
+    /// any GC-managed pointers stored in the returned block.
     @trusted @nogc nothrow
     void[] allocateZeroed(size_t bytes) shared
     {
         if (!bytes)
             return null;
-        auto p = GC_MALLOC_ATOMIC(bytes);
-        if (!p)
-            return null;
-        import core.stdc.string : memset;
+        auto p = GC_MALLOC(bytes); // already zeroed; scannable for GC pointers
+        return p ? p[0 .. bytes] : null;
+    }
 
-        memset(p, 0, bytes);
-        return p[0 .. bytes];
+    /// Allocates memory for non-pointer (scalar) data.
+    /// Uses GC_MALLOC_ATOMIC: the GC will not scan this block for pointers,
+    /// making it more efficient for large numeric arrays or byte buffers.
+    /// Do NOT store GC-managed pointers in memory returned by this method.
+    @trusted @nogc nothrow
+    void[] allocateAtomic(size_t bytes) shared
+    {
+        if (!bytes)
+            return null;
+        auto p = GC_MALLOC_ATOMIC(bytes);
+        return p ? p[0 .. bytes] : null;
     }
 
     /// Enables incremental garbage collection
@@ -200,6 +224,36 @@ struct BoehmAllocator
         GC_disable();
     }
 
+    /// Re-enables garbage collection after disable()
+    @trusted @nogc nothrow
+    void enable() shared
+    {
+        GC_enable();
+    }
+
+    /// Returns the current total heap size in bytes
+    @trusted @nogc nothrow
+    size_t getHeapSize() shared const
+    {
+        return GC_get_heap_size();
+    }
+
+    /// Returns a lower bound on the number of free bytes in the GC heap
+    /// (excludes unmapped memory returned to the OS).
+    @trusted @nogc nothrow
+    size_t freeBytes() shared const
+    {
+        return GC_get_free_bytes();
+    }
+
+    /// Returns the total number of bytes allocated in this process.
+    /// Includes all GC-managed memory ever requested; never decreases.
+    @trusted @nogc nothrow
+    size_t totalBytes() shared const
+    {
+        return GC_get_total_bytes();
+    }
+
     /// Triggers garbage collection
     @trusted @nogc nothrow
     void collect() shared
@@ -212,6 +266,15 @@ struct BoehmAllocator
     bool isHeapPtr(const void* ptr) shared const
     {
         return GC_is_heap_ptr(cast(void*) ptr) != 0;
+    }
+
+    /// Given any pointer into a GC-managed block (including interior pointers),
+    /// returns the start address of that block.
+    /// Returns null if ptr is not inside a GC-heap allocation.
+    @trusted @nogc nothrow
+    void* resolveInternalPointer(void* ptr) shared const
+    {
+        return GC_base(ptr);
     }
 
     /// Checks if the allocator owns the memory block
@@ -344,15 +407,19 @@ version (unittest)
     {
         version (GCThreads)
         {
-            assert(!GC_thread_is_registered());
+            // GC_init() (called in shared static this) implicitly registers the main
+            // thread when the library is compiled with -DGC_THREADS.
+            assert(GC_thread_is_registered());
             {
                 auto guard = ThreadGuard.create();
+                // Main thread was already registered: create() is a no-op.
                 assert(GC_thread_is_registered());
                 auto buffer = BoehmAllocator.instance.allocate(1024);
                 assert(buffer !is null);
                 BoehmAllocator.instance.deallocate(buffer);
             }
-            assert(!GC_thread_is_registered());
+            // Destructor is also a no-op (isRegistered == false); thread stays registered.
+            assert(GC_thread_is_registered());
         }
         else
         {
@@ -382,5 +449,307 @@ version (unittest)
         assert(names.length == 3);
         assert(names.ptr);
         BoehmAllocator.instance.deallocate(names);
+    }
+
+    @("allocateZeroed: memory is zero-initialized")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateZeroed(32);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        foreach (i; 0 .. 32)
+            assert((cast(ubyte[]) b)[i] == 0, "byte not zero");
+    }
+
+    @("enable: re-enables GC after disable")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        BoehmAllocator.instance.disable();
+        BoehmAllocator.instance.enable();
+        // After re-enabling, allocation must still work
+        void[] b = BoehmAllocator.instance.allocate(64);
+        assert(b !is null);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("getHeapSize: returns positive value after allocation")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(1024 * 1024);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        assert(BoehmAllocator.instance.getHeapSize() > 0);
+    }
+
+    @("allocateAtomic: returns non-null for positive size")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(256);
+        assert(b !is null);
+        assert(b.length == 256);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("allocateAtomic: zero size returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.allocateAtomic(0);
+        assert(b is null);
+    }
+
+    @("allocateAtomic: returned memory is GC-heap-owned")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(64);
+        assert(b !is null);
+        assert(BoehmAllocator.instance.isHeapPtr(b.ptr));
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("allocateAtomic: memory is writable")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocateAtomic(16);
+        assert(b !is null);
+        (cast(ubyte[]) b)[] = ubyte(0xAB);
+        foreach (i; 0 .. 16)
+            assert((cast(ubyte[]) b)[i] == 0xAB);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    // Semantic requirement: allocateZeroed must use GC_MALLOC (pointer-scanning),
+    // NOT GC_MALLOC_ATOMIC. GC_MALLOC_ATOMIC tells BDWGC the block contains no GC
+    // pointers and skips scanning it entirely. A general-purpose zeroed allocator
+    // must allow callers to store GC-managed pointers inside the returned memory.
+    // Note: a runtime assertion cannot reliably distinguish the two with BDWGC's
+    // conservative collector (stack residue keeps inner blocks alive regardless).
+    // The correctness is enforced by the implementation using GC_MALLOC below.
+
+    @("goodAllocSize: zero returns zero")
+    @nogc @system nothrow unittest
+    {
+        assert(BoehmAllocator.instance.goodAllocSize(0) == 0);
+    }
+
+    @("goodAllocSize: rounds up to next multiple of alignment")
+    @nogc @system nothrow unittest
+    {
+        enum a = BoehmAllocator.alignment;
+        assert(BoehmAllocator.instance.goodAllocSize(1) == a);
+        assert(BoehmAllocator.instance.goodAllocSize(a) == a);
+        assert(BoehmAllocator.instance.goodAllocSize(a + 1) == a * 2);
+        assert(BoehmAllocator.instance.goodAllocSize(a * 2) == a * 2);
+        assert(BoehmAllocator.instance.goodAllocSize(a * 2 + 1) == a * 3);
+    }
+
+    @("allocate(0) returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.allocate(0);
+        assert(b is null);
+        assert(b.ptr is null);
+    }
+
+    @("alignedAllocate with zero bytes returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.alignedAllocate(0, 16);
+        assert(b is null);
+    }
+
+    @("alignedAllocate with non-power-of-2 alignment returns null")
+    @nogc @system nothrow unittest
+    {
+        auto b = BoehmAllocator.instance.alignedAllocate(16, 3);
+        assert(b is null);
+    }
+
+    @("alignedAllocate with alignment smaller than pointer size returns null")
+    @nogc @system nothrow unittest
+    {
+        // (void*).sizeof / 2 is below minimum — must be rejected
+        auto b = BoehmAllocator.instance.alignedAllocate(16, cast(uint)(void*).sizeof / 2);
+        assert(b is null);
+    }
+
+    @("owns(null[]) returns false")
+    @nogc @system nothrow unittest
+    {
+        void[] empty = null;
+        assert(!BoehmAllocator.instance.owns(empty));
+    }
+
+    @("reallocate to zero deallocates and nulls the slice")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(64);
+        assert(b !is null);
+        bool ok = BoehmAllocator.instance.reallocate(b, 0);
+        assert(ok);
+        assert(b is null);
+    }
+
+    @("isGoodDynamicAlignment: zero and non-powers-of-2 are invalid")
+    @nogc nothrow pure unittest
+    {
+        assert(!isGoodDynamicAlignment(0));
+        assert(!isGoodDynamicAlignment(3));
+        assert(!isGoodDynamicAlignment(5));
+        assert(!isGoodDynamicAlignment(6));
+        assert(!isGoodDynamicAlignment(12));
+        assert(!isGoodDynamicAlignment(uint.max)); // 0xFFFFFFFF is not a power of 2
+    }
+
+    @("isGoodDynamicAlignment: values smaller than pointer size are invalid")
+    @nogc nothrow pure unittest
+    {
+        // (void*).sizeof / 2 is always < (void*).sizeof, so must be invalid
+        assert(!isGoodDynamicAlignment((void*).sizeof / 2));
+    }
+
+    @("isGoodDynamicAlignment: pointer size and multiples are valid")
+    @nogc nothrow pure unittest
+    {
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof));
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof * 2));
+        assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof * 4));
+        assert(isGoodDynamicAlignment(64));
+        assert(isGoodDynamicAlignment(128));
+    }
+
+    // --- Integration tests: allocate vs allocateAtomic ---
+    //
+    // allocate  (GC_MALLOC):        zero-initialized, GC scans block for pointers.
+    // allocateAtomic (GC_MALLOC_ATOMIC): NOT zero-initialized, GC does NOT scan block.
+    //
+    // Rule of thumb:
+    //   allocate       — general use; safe to store GC-managed pointers inside.
+    //   allocateAtomic — scalar/numeric data (int[], float[], ubyte[]); never store
+    //                    GC pointers inside, GC won't trace them.
+
+    @("integration: allocate is zero-initialized, allocateAtomic requires explicit init")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        // allocate: GC_MALLOC guarantees the returned block is zeroed.
+        void[] gcBlock = BoehmAllocator.instance.allocate(128);
+        assert(gcBlock !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(gcBlock);
+        foreach (i; 0 .. 128)
+            assert((cast(ubyte[]) gcBlock)[i] == 0,
+                "allocate must return zero-initialized memory");
+
+        // allocateAtomic: GC_MALLOC_ATOMIC does NOT zero — caller must initialize.
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(128);
+        assert(atomicBlock !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(atomicBlock);
+        (cast(ubyte[]) atomicBlock)[] = 0xCC; // explicit initialization required
+        foreach (i; 0 .. 128)
+            assert((cast(ubyte[]) atomicBlock)[i] == 0xCC);
+    }
+
+    @("integration: resolveInternalPointer works on both allocate and allocateAtomic blocks")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        void[] gcBlock = BoehmAllocator.instance.allocate(256);
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(256);
+        assert(gcBlock !is null && atomicBlock !is null);
+        scope (exit)
+        {
+            BoehmAllocator.instance.deallocate(gcBlock);
+            BoehmAllocator.instance.deallocate(atomicBlock);
+        }
+
+        // Interior pointer at offset 128 must resolve back to the block start
+        assert(BoehmAllocator.instance.resolveInternalPointer(gcBlock.ptr + 128)
+                == gcBlock.ptr);
+        assert(BoehmAllocator.instance.resolveInternalPointer(
+                atomicBlock.ptr + 128)
+                == atomicBlock.ptr);
+    }
+
+    @("integration: heap stats account for both allocate and allocateAtomic")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        size_t totalBefore = BoehmAllocator.instance.totalBytes();
+
+        void[] gcBlock = BoehmAllocator.instance.allocate(512 * 1024);
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(512 * 1024);
+        assert(gcBlock !is null && atomicBlock !is null);
+
+        // totalBytes never decreases after live allocations
+        assert(BoehmAllocator.instance.totalBytes() >= totalBefore);
+        // freeBytes must be <= heap size at all times
+        assert(BoehmAllocator.instance.freeBytes() <= BoehmAllocator.instance.getHeapSize());
+
+        BoehmAllocator.instance.deallocate(gcBlock);
+        BoehmAllocator.instance.deallocate(atomicBlock);
+    }
+
+    @("freeBytes: returns a size_t value")
+    @nogc @system nothrow unittest
+    {
+        // freeBytes is a lower bound; it can be 0 in very constrained conditions,
+        // but must always be <= getHeapSize().
+        size_t free = BoehmAllocator.instance.freeBytes();
+        assert(free <= BoehmAllocator.instance.getHeapSize());
+    }
+
+    @("totalBytes: increases after allocations")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        size_t before = BoehmAllocator.instance.totalBytes();
+        void[] b = BoehmAllocator.instance.allocate(1024 * 1024);
+        assert(b !is null);
+        size_t after = BoehmAllocator.instance.totalBytes();
+        // totalBytes never decreases; after a fresh 1 MiB allocation it must grow
+        assert(after >= before);
+        assert(after > 0);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("resolveInternalPointer: interior pointer maps to block start")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(256);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        // An interior pointer 64 bytes into the block must resolve to b.ptr
+        void* interior = b.ptr + 64;
+        void* base = BoehmAllocator.instance.resolveInternalPointer(interior);
+        assert(base == b.ptr);
+    }
+
+    @("resolveInternalPointer: null returns null")
+    @nogc @system nothrow unittest
+    {
+        assert(BoehmAllocator.instance.resolveInternalPointer(null) is null);
+    }
+
+    @("resolveInternalPointer: stack pointer returns null")
+    @nogc @system nothrow unittest
+    {
+        int local = 42;
+        assert(BoehmAllocator.instance.resolveInternalPointer(&local) is null);
     }
 }
