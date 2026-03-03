@@ -224,6 +224,22 @@ struct BoehmAllocator
         return GC_get_heap_size();
     }
 
+    /// Returns a lower bound on the number of free bytes in the GC heap
+    /// (excludes unmapped memory returned to the OS).
+    @trusted @nogc nothrow
+    size_t freeBytes() shared const
+    {
+        return GC_get_free_bytes();
+    }
+
+    /// Returns the total number of bytes allocated in this process.
+    /// Includes all GC-managed memory ever requested; never decreases.
+    @trusted @nogc nothrow
+    size_t totalBytes() shared const
+    {
+        return GC_get_total_bytes();
+    }
+
     /// Triggers garbage collection
     @trusted @nogc nothrow
     void collect() shared
@@ -236,6 +252,15 @@ struct BoehmAllocator
     bool isHeapPtr(const void* ptr) shared const
     {
         return GC_is_heap_ptr(cast(void*) ptr) != 0;
+    }
+
+    /// Given any pointer into a GC-managed block (including interior pointers),
+    /// returns the start address of that block.
+    /// Returns null if ptr is not inside a GC-heap allocation.
+    @trusted @nogc nothrow
+    void* resolveInternalPointer(void* ptr) shared const
+    {
+        return GC_base(ptr);
     }
 
     /// Checks if the allocator owns the memory block
@@ -582,5 +607,130 @@ version (unittest)
         assert(isGoodDynamicAlignment(cast(uint)(void*).sizeof * 4));
         assert(isGoodDynamicAlignment(64));
         assert(isGoodDynamicAlignment(128));
+    }
+
+    // --- Integration tests: allocate vs allocateAtomic ---
+    //
+    // allocate  (GC_MALLOC):        zero-initialized, GC scans block for pointers.
+    // allocateAtomic (GC_MALLOC_ATOMIC): NOT zero-initialized, GC does NOT scan block.
+    //
+    // Rule of thumb:
+    //   allocate       — general use; safe to store GC-managed pointers inside.
+    //   allocateAtomic — scalar/numeric data (int[], float[], ubyte[]); never store
+    //                    GC pointers inside, GC won't trace them.
+
+    @("integration: allocate is zero-initialized, allocateAtomic requires explicit init")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        // allocate: GC_MALLOC guarantees the returned block is zeroed.
+        void[] gcBlock = BoehmAllocator.instance.allocate(128);
+        assert(gcBlock !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(gcBlock);
+        foreach (i; 0 .. 128)
+            assert((cast(ubyte[]) gcBlock)[i] == 0,
+                "allocate must return zero-initialized memory");
+
+        // allocateAtomic: GC_MALLOC_ATOMIC does NOT zero — caller must initialize.
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(128);
+        assert(atomicBlock !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(atomicBlock);
+        (cast(ubyte[]) atomicBlock)[] = 0xCC; // explicit initialization required
+        foreach (i; 0 .. 128)
+            assert((cast(ubyte[]) atomicBlock)[i] == 0xCC);
+    }
+
+    @("integration: resolveInternalPointer works on both allocate and allocateAtomic blocks")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        void[] gcBlock     = BoehmAllocator.instance.allocate(256);
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(256);
+        assert(gcBlock !is null && atomicBlock !is null);
+        scope (exit)
+        {
+            BoehmAllocator.instance.deallocate(gcBlock);
+            BoehmAllocator.instance.deallocate(atomicBlock);
+        }
+
+        // Interior pointer at offset 128 must resolve back to the block start
+        assert(BoehmAllocator.instance.resolveInternalPointer(gcBlock.ptr + 128)
+               == gcBlock.ptr);
+        assert(BoehmAllocator.instance.resolveInternalPointer(atomicBlock.ptr + 128)
+               == atomicBlock.ptr);
+    }
+
+    @("integration: heap stats account for both allocate and allocateAtomic")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+
+        size_t totalBefore = BoehmAllocator.instance.totalBytes();
+
+        void[] gcBlock     = BoehmAllocator.instance.allocate(512 * 1024);
+        void[] atomicBlock = BoehmAllocator.instance.allocateAtomic(512 * 1024);
+        assert(gcBlock !is null && atomicBlock !is null);
+
+        // totalBytes never decreases after live allocations
+        assert(BoehmAllocator.instance.totalBytes() >= totalBefore);
+        // freeBytes must be <= heap size at all times
+        assert(BoehmAllocator.instance.freeBytes() <= BoehmAllocator.instance.getHeapSize());
+
+        BoehmAllocator.instance.deallocate(gcBlock);
+        BoehmAllocator.instance.deallocate(atomicBlock);
+    }
+
+    @("freeBytes: returns a size_t value")
+    @nogc @system nothrow unittest
+    {
+        // freeBytes is a lower bound; it can be 0 in very constrained conditions,
+        // but must always be <= getHeapSize().
+        size_t free = BoehmAllocator.instance.freeBytes();
+        assert(free <= BoehmAllocator.instance.getHeapSize());
+    }
+
+    @("totalBytes: increases after allocations")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        size_t before = BoehmAllocator.instance.totalBytes();
+        void[] b = BoehmAllocator.instance.allocate(1024 * 1024);
+        assert(b !is null);
+        size_t after = BoehmAllocator.instance.totalBytes();
+        // totalBytes never decreases; after a fresh 1 MiB allocation it must grow
+        assert(after >= before);
+        assert(after > 0);
+        BoehmAllocator.instance.deallocate(b);
+    }
+
+    @("resolveInternalPointer: interior pointer maps to block start")
+    @nogc @system nothrow unittest
+    {
+        auto guard = ThreadGuard.create();
+        void[] b = BoehmAllocator.instance.allocate(256);
+        assert(b !is null);
+        scope (exit)
+            BoehmAllocator.instance.deallocate(b);
+        // An interior pointer 64 bytes into the block must resolve to b.ptr
+        void* interior = b.ptr + 64;
+        void* base = BoehmAllocator.instance.resolveInternalPointer(interior);
+        assert(base == b.ptr);
+    }
+
+    @("resolveInternalPointer: null returns null")
+    @nogc @system nothrow unittest
+    {
+        assert(BoehmAllocator.instance.resolveInternalPointer(null) is null);
+    }
+
+    @("resolveInternalPointer: stack pointer returns null")
+    @nogc @system nothrow unittest
+    {
+        int local = 42;
+        assert(BoehmAllocator.instance.resolveInternalPointer(&local) is null);
     }
 }
